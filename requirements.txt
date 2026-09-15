@@ -1,0 +1,6 @@
+opencv-python>=4.9.0
+ultralytics>=8.2.0
+numpy>=1.26
+pyzbar>=0.1.9          # barcode decoding — needs libzbar0 on the Pi (apt install libzbar0)
+RPi.GPIO>=0.7.1 ; platform_machine == "armv7l" or platform_machine == "aarch64"
+Pillow>=10.0

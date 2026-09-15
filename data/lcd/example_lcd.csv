@@ -1,0 +1,6 @@
+shipment_id,leg,carrier,reference_number,container_number,description,quantity,weight_kg,unit_price_eur,customs_code,notes,created_at,updated_by
+SHP-001,1,ACME-Freight,REF-00231,MSCU1234567,Machine parts,12,340.5,58.2,847990,,2026-09-01T08:12:00Z,jdupont
+SHP-001,1,ACME-Freight,REF-00232,MSCU1234567,Hydraulic pump,2,120.0,410.0,841360,fragile,2026-09-01T08:12:05Z,jdupont
+SHP-001,1,ACME-Freight,REF-00233,TCLU9988776,Textile rolls,40,890.0,12.1,520811,,2026-09-01T08:14:11Z,jdupont
+SHP-001,2,ACME-Freight,REF-00234,TCLU9988776,Textile rolls,15,320.0,12.1,520811,,2026-09-01T08:14:20Z,jdupont
+SHP-001,1,ACME-Freight,REF-00235,HLXU4455221,Electronics - consumer,300,610.0,89.9,851762,handle with care,2026-09-01T08:16:44Z,mleroy

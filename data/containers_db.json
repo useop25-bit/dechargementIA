@@ -1,0 +1,26 @@
+{
+  "MSCU1234567": {
+    "type": "20ft dry",
+    "length_mm": 6058,
+    "width_mm": 2438,
+    "height_mm": 2591,
+    "tare_weight_kg": 2300,
+    "max_payload_kg": 28180
+  },
+  "TCLU9988776": {
+    "type": "40ft dry",
+    "length_mm": 12192,
+    "width_mm": 2438,
+    "height_mm": 2591,
+    "tare_weight_kg": 3750,
+    "max_payload_kg": 26580
+  },
+  "HLXU4455221": {
+    "type": "40ft high cube",
+    "length_mm": 12192,
+    "width_mm": 2438,
+    "height_mm": 2896,
+    "tare_weight_kg": 3900,
+    "max_payload_kg": 26430
+  }
+}

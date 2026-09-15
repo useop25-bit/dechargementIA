@@ -1,0 +1,37 @@
+[
+  {
+    "reference_number": "REF-00231",
+    "container_number": "MSCU1234567",
+    "description": "Machine parts",
+    "quantity": 12,
+    "weight_kg": 340.5
+  },
+  {
+    "reference_number": "REF-00232",
+    "container_number": "MSCU1234567",
+    "description": "Hydraulic pump",
+    "quantity": 2,
+    "weight_kg": 120.0
+  },
+  {
+    "reference_number": "REF-00233",
+    "container_number": "TCLU9988776",
+    "description": "Textile rolls",
+    "quantity": 40,
+    "weight_kg": 890.0
+  },
+  {
+    "reference_number": "REF-00234",
+    "container_number": "TCLU9988776",
+    "description": "Textile rolls",
+    "quantity": 15,
+    "weight_kg": 320.0
+  },
+  {
+    "reference_number": "REF-00235",
+    "container_number": "HLXU4455221",
+    "description": "Electronics - consumer",
+    "quantity": 300,
+    "weight_kg": 610.0
+  }
+]
