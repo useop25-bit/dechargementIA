@@ -11,30 +11,29 @@ association table with the LCD references.
 
 from __future__ import annotations
 
-import numpy as np
-from ultralytics import YOLO
+from typing import Any
 
 from config import settings
-from utils.geometry import BBox, SegmentationInstance
-from utils.logger import get_logger
+from srcs.utils.geometry import BBox, SegmentationInstance
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
 class SegmentationModel:
     def __init__(self, weights_path=settings.SEGMENTATION_MODEL_WEIGHTS) -> None:
+        self._model = None
+        if not settings.ENABLE_YOLO:
+            log.info("YOLO model disabled by ENABLE_YOLO")
+            return
+        from ultralytics import YOLO
+
         log.info("Loading segmentation model from %s", weights_path)
         self._model = YOLO(str(weights_path))
 
-    def predict(self, image: np.ndarray) -> list[SegmentationInstance]:
-        """
-        Run instance segmentation on a single BGR image.
+    def predict(self, image: Any) -> list[SegmentationInstance]:
+        if self._model is None:
+            return []
 
-        # TODO(classes): fill config.settings.SEGMENTATION_CLASS_NAMES with
-        # your real classes (container types, or container vs. non-container
-        # if the model also picks up other objects) — pipeline/fusion.py and
-        # pipeline/decision.py may want to filter/weight by class_name.
-        """
         results = self._model.predict(
             image, conf=settings.SEGMENTATION_CONF_THRESHOLD, verbose=False
         )

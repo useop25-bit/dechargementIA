@@ -29,19 +29,18 @@ import cv2
 import numpy as np
 
 from config import settings
-from hardware.camera import Camera
-from hardware.display import Display
-from models.barcode_model import BarcodeModel
-from models.risk_model import RiskModel
-from models.segmentation_model import SegmentationModel
-from pipeline import decision as decision_pipeline
-from pipeline import draw as draw_pipeline
-from pipeline import fusion as fusion_pipeline
-from utils.geometry import Decision
-from utils.logger import get_logger
+from config.hardware.camera import Camera
+from config.hardware.display import Display
+from srcs.models.barcode_model import BarcodeModel
+from srcs.models.risk_model import RiskModel
+from srcs.models.segmentation_model import SegmentationModel
+from srcs.pipeline import decision as decision_pipeline
+from srcs.pipeline import draw as draw_pipeline
+from srcs.pipeline import fusion as fusion_pipeline
+from srcs.utils.geometry import Decision
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
-
 
 class State(Enum):
     IDLE = auto()
@@ -49,13 +48,11 @@ class State(Enum):
     ANALYZING = auto()
     RESULT_SHOWN = auto()
 
-
 @dataclass
 class SessionData:
     raw_frame: np.ndarray | None = None
     decisions: list[Decision] = field(default_factory=list)
     annotated_frame: np.ndarray | None = None
-
 
 class StateMachine:
     def __init__(
@@ -133,16 +130,33 @@ class StateMachine:
         instances = self.segmentation_model.predict(frame)
         barcodes = self.barcode_model.predict(frame)
 
-        matches = fusion_pipeline.fuse(
-            instances=instances,
-            barcodes=barcodes,
-            lcd_records=self.lcd_records,
-            containers_db=self.containers_db,
-        )
+        if settings.ENABLE_FUSION:
+            matches = fusion_pipeline.fuse(
+                instances=instances,
+                barcodes=barcodes,
+                lcd_records=self.lcd_records,
+                containers_db=self.containers_db,
+            )
+        else:
+            from srcs.utils.geometry import ContainerMatch
 
-        decisions = decision_pipeline.decide(
-            instances=instances, matches=matches, risks=risks
-        )
+            matches = [
+                ContainerMatch(
+                    instance_id=instance.instance_id,
+                    reference_number=None,
+                    container_number=None,
+                    confidence=0.0,
+                    evidence={"fusion": "disabled"},
+                )
+                for instance in instances
+            ]
+
+        if settings.ENABLE_DECISION:
+            decisions = decision_pipeline.decide(
+                instances=instances, matches=matches, risks=risks
+            )
+        else:
+            decisions = []
 
         annotated = draw_pipeline.draw_decisions(frame, decisions)
 
@@ -168,16 +182,6 @@ class StateMachine:
         self.display.show_message("Ready — press CAPTURE")
 
     def _save_session(self, accepted: bool) -> None:
-        """
-        Persist the raw picture, annotated picture, and a JSON summary of
-        the decisions + operator verdict, for audit/traceability.
-
-        # TODO(storage): local disk storage under data/captures/ is a
-        # reasonable default for a standalone device; if results need to be
-        # centralized (e.g. uploaded to a server/DB for audit), add that
-        # here — this is the single choke point where every finalized
-        # session passes through.
-        """
         settings.CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
         ts = time.strftime("%Y%m%dT%H%M%S")
         session_dir = settings.CAPTURES_DIR / ts
@@ -205,5 +209,9 @@ class StateMachine:
         }
         with (session_dir / "summary.json").open("w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
+
+        settings.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with settings.RESULTS_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(summary, ensure_ascii=False) + "\n")
 
         log.info("Session saved to %s", session_dir)

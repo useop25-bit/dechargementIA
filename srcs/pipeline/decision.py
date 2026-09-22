@@ -11,39 +11,20 @@ instance, a `Decision`:
     - is_security_risk: bool,
     - explanation: human-readable justification text,
     - matched_container / risk_detections: the evidence behind it.
-
-# TODO(business-rules): the logic below is a reasonable, explainable
-# starting point but the actual thresholds and rules are a business
-# decision only you can make. Concretely, you need to settle:
-#   1. Severity mapping per risk class (some risk labels might be far more
-#      serious than others — right now every class above
-#      DECISION_REJECT_RISK_CONF is treated equally).
-#   2. What happens when fusion confidence is low (< settings.
-#      DECISION_MIN_FUSION_CONF_FOR_AUTOMATCH) AND there's no risk detected
-#      at all — currently this becomes a "needs manual review" decision
-#      with weight 0 rather than an automatic pass. Confirm that's the
-#      behaviour you want (vs. silently accepting unmatched containers).
-#   3. Whether a single picture can produce *multiple* extraction zones
-#      (e.g. two risky containers in the same shot) — decide() below
-#      already supports this (returns a list), but app/state_machine.py
-#      currently only visualises/validates one Decision at a time; extend
-#      it if multi-zone handling in a single validation step is needed.
 """
 
 from __future__ import annotations
 
 from config import settings
-from utils.geometry import ContainerMatch, Decision, RiskDetection, SegmentationInstance
-from utils.logger import get_logger
+from srcs.utils.geometry import ContainerMatch, Decision, RiskDetection, SegmentationInstance
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
-
 
 def _risks_overlapping(
     instance: SegmentationInstance, risks: list[RiskDetection]
 ) -> list[RiskDetection]:
     return [r for r in risks if instance.bbox.iou(r.bbox) > 0.0 or instance.bbox.contains_point(*r.bbox.center)]
-
 
 def _build_explanation(
     instance: SegmentationInstance,
@@ -78,14 +59,15 @@ def _build_explanation(
 
     return " ".join(parts)
 
-
 def decide(
     instances: list[SegmentationInstance],
     matches: list[ContainerMatch],
     risks: list[RiskDetection],
 ) -> list[Decision]:
     """
-    Produce one Decision per detected container instance.
+    Produce one Decision per detected container instance, ordered by the
+    configured strategy. The initial test strategy selects the leftmost
+    takeable instance only.
 
     Sorted by descending weight so the caller can easily pick the "most
     important" decision first (e.g. app/state_machine.py showing the
@@ -94,7 +76,16 @@ def decide(
     matches_by_instance = {m.instance_id: m for m in matches}
     decisions: list[Decision] = []
 
-    for instance in instances:
+    ordered_instances = instances
+    if settings.DECISION_STRATEGY == "leftmost":
+        ordered_instances = sorted(instances, key=lambda item: item.bbox.x)
+
+    for instance in ordered_instances:
+        if settings.DECISION_STRATEGY == "leftmost" and (
+            instance.bbox.width < settings.DECISION_MIN_BOX_WIDTH
+            or instance.bbox.height < settings.DECISION_MIN_BOX_HEIGHT
+        ):
+            continue
         match = matches_by_instance.get(instance.instance_id)
         if match is None:
             log.warning("No fusion match found for instance %d, skipping", instance.instance_id)
@@ -128,9 +119,12 @@ def decide(
         )
         decisions.append(decision)
 
-    decisions.sort(key=lambda d: d.weight, reverse=True)
-    return decisions
+        if settings.DECISION_STRATEGY == "leftmost":
+            break
 
+    if settings.DECISION_STRATEGY != "leftmost":
+        decisions.sort(key=lambda d: d.weight, reverse=True)
+    return decisions
 
 def primary_decision(decisions: list[Decision]) -> Decision | None:
     """Convenience accessor: the single highest-weight decision, if any."""

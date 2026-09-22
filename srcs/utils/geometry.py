@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-
 @dataclass
 class BBox:
     """Axis-aligned bounding box in pixel coordinates (top-left origin)."""
@@ -58,7 +57,6 @@ class BBox:
     def as_tuple(self) -> tuple[int, int, int, int]:
         return (self.x, self.y, self.width, self.height)
 
-
 @dataclass
 class RiskDetection:
     """One detection from the risk model."""
@@ -66,7 +64,6 @@ class RiskDetection:
     label: str
     confidence: float
     bbox: BBox
-
 
 @dataclass
 class SegmentationInstance:
@@ -78,7 +75,6 @@ class SegmentationInstance:
     bbox: BBox
     mask: "np.ndarray | None" = None  # binary mask, same size as image, optional in-memory only
 
-
 @dataclass
 class BarcodeDetection:
     """One barcode found in the image."""
@@ -87,7 +83,6 @@ class BarcodeDetection:
     symbology: str            # e.g. "CODE128", "QR", "EAN13", "OCR-ISO6346"
     confidence: float
     bbox: BBox
-
 
 @dataclass
 class ContainerMatch:
@@ -100,9 +95,7 @@ class ContainerMatch:
     reference_number: Optional[str]
     container_number: Optional[str]
     confidence: float
-    evidence: dict = field(default_factory=dict)  # human-readable breakdown,
-                                                    # e.g. {"barcode_match": 0.7, "dimension_match": 0.1}
-
+    evidence: dict = field(default_factory=dict)  # human-readable breakdown, e.g. {"barcode_match": 0.7, "dimension_match": 0.1}
 
 @dataclass
 class Decision:

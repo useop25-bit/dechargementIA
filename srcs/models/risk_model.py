@@ -16,37 +16,29 @@ classifier (whole-image label, no bbox) or something else entirely, adjust
 
 from __future__ import annotations
 
-import numpy as np
-from ultralytics import YOLO
+from typing import Any
 
 from config import settings
-from utils.geometry import BBox, RiskDetection
-from utils.logger import get_logger
+from srcs.utils.geometry import BBox, RiskDetection
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
 class RiskModel:
     def __init__(self, weights_path=settings.RISK_MODEL_WEIGHTS) -> None:
+        self._model = None
+        if not settings.ENABLE_RISK_MODEL:
+            log.info("Risk model disabled by ENABLE_RISK_MODEL")
+            return
+        from ultralytics import YOLO
+
         log.info("Loading risk model from %s", weights_path)
         self._model = YOLO(str(weights_path))
 
-    def predict(self, image: np.ndarray) -> list[RiskDetection]:
-        """
-        Run risk detection on a single BGR image (as returned by
-        hardware.camera.Camera.capture).
+    def predict(self, image: Any) -> list[RiskDetection]:
+        if self._model is None:
+            return []
 
-        # TODO(risk-taxonomy): once config.settings.RISK_CLASS_NAMES is
-        # filled in with your real classes, double check `result.names`
-        # below matches it (Ultralytics stores names on the model itself,
-        # this is just a safety cross-check you may want to log or assert).
-        #
-        # TODO(severity): this function only returns raw detections. Any
-        # notion of "how severe is this risk" / "does it force a reject"
-        # belongs in pipeline/decision.py, not here — keep this wrapper a
-        # thin, dumb pass-through over the model's raw output so it stays
-        # easy to swap/retrain independently.
-        """
         results = self._model.predict(
             image, conf=settings.RISK_CONF_THRESHOLD, verbose=False
         )

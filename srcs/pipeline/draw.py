@@ -14,7 +14,7 @@ import textwrap
 import cv2
 import numpy as np
 
-from utils.geometry import Decision
+from srcs.utils.geometry import Decision
 
 # BGR colors
 COLOR_RISK = (0, 0, 255)          # red
@@ -24,14 +24,12 @@ COLOR_SELECTION_OK = (0, 200, 0)        # green — identified, no risk
 COLOR_TEXT_BG = (20, 20, 20)
 COLOR_TEXT_FG = (255, 255, 255)
 
-
 def _selection_color(decision: Decision) -> tuple[int, int, int]:
     if decision.is_security_risk:
         return COLOR_SELECTION_RISK
     if decision.matched_container is None or decision.weight >= 0.3:
         return COLOR_SELECTION_REVIEW
     return COLOR_SELECTION_OK
-
 
 def draw_decisions(image: np.ndarray, decisions: list[Decision], max_text_width_chars: int = 60) -> np.ndarray:
     """
@@ -63,7 +61,6 @@ def draw_decisions(image: np.ndarray, decisions: list[Decision], max_text_width_
 
     text_panel = _build_text_panel(decisions, width=annotated.shape[1], max_chars=max_text_width_chars)
     return np.vstack([annotated, text_panel])
-
 
 def _build_text_panel(decisions: list[Decision], width: int, max_chars: int) -> np.ndarray:
     lines: list[str] = []

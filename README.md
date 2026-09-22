@@ -1,343 +1,528 @@
 # Container Inspection Station
 
-An embedded inspection system built on a Raspberry Pi (4 or 5) that photographs
-shipping containers inside a truck, cross-references that photo against
-declared shipment data (the "LCD" list), runs three independent ML models on
-the image, fuses everything into a single probabilistic read of "what
-container is this, and what's in it", and produces an automatic **decision**
-(what to select/remove from the load, and why) with a human validation step.
+A Raspberry Pi-oriented computer-vision prototype for inspecting a truck load of containers. The station captures an image, detects visible objects/instances, compares the result with declared shipment data, and presents an explainable result for operator validation.
 
-This document is the single source of truth for the project. Read it before
-touching the code.
+The project is in active development. The software architecture and test pipeline exist, but the generic model, fusion rules, and decision policy are not yet a validated industrial solution.
 
----
+## Project purpose
 
-## 1. Problem statement
+The intended workflow is:
 
-A truck arrives loaded with containers. An operator needs to:
+1. An operator points the camera at a truck load.
+2. The operator captures an image.
+3. The software runs the configured computer-vision stages.
+4. Detected instances are compared with the declared LCD list and container metadata.
+5. The software produces an annotated image and a decision explanation.
+6. The operator accepts or rejects the displayed result.
+7. The raw image, annotated image, and decision summary are stored for later review.
 
-1. Take a picture of the load (or of a container).
-2. Have the system automatically:
-   - detect security/safety **risks** visible in the picture,
-   - detect and segment every **container instance** visible in the picture,
-   - detect and decode every **barcode** visible in the picture and localize
-     it in the image,
-   - read the **LCD** (the shipment's declared reference list, given as a
-     CSV) and the **container reference database** (a JSON mapping container
-     numbers to their physical properties),
-   - **fuse** the visual detections with the declared data to figure out,
-     with a confidence score, which detected container instance corresponds
-     to which declared reference,
-   - **decide** whether a container should be pulled out of the load
-     (security risk, mismatch, damage, etc.), producing a selection zone,
-     and an explanation of the decision,
-   - **draw** the decision on the picture (the zone to extract, risk
-     annotations, text) and show it to the operator,
-3. Let the operator **validate or reject** the automatic decision with a
-   physical button.
+The current prototype is designed around a Raspberry Pi, camera, display, and two physical buttons, but it also supports keyboard-controlled development mode.
 
-Everything runs on a Raspberry Pi wired to a USB webcam, a screen, and two
-push buttons.
+## Current status and limitations
 
----
+### Implemented
 
-## 2. Physical / hardware design
+- Python package layout under `srcs/`
+- configuration under `config/`
+- OpenCV camera abstraction
+- OpenCV display abstraction
+- GPIO buttons with keyboard fallback
+- four-state application workflow
+- Ultralytics YOLO segmentation wrapper
+- optional risk/object-detection wrapper
+- optional barcode localization and decoding wrapper
+- LCD CSV-to-JSON conversion
+- container metadata loading
+- prototype fusion algorithm
+- prototype decision algorithm
+- annotated image rendering
+- detailed one-shot pipeline runner in `tests/run_test.py`
+- deterministic unit tests for geometry, LCD parsing, fusion, and decision behavior
+- application and session logs under `data/logs/`
 
-### 2.1 Bill of materials
+### Not production-ready yet
 
-| Component | Notes |
-|---|---|
-| Raspberry Pi 4 or 5 (4GB+ RAM recommended) | Pi 5 strongly preferred if segmentation model is heavy — see §6.1 |
-| USB webcam | Accessed through OpenCV (`cv2.VideoCapture`), no `picamera2` dependency |
-| Screen | Any HDMI monitor/touchscreen the Pi can drive as a normal X11/Wayland display |
-| 2x momentary push buttons | Wired to GPIO with pull-down/pull-up + debouncing |
-| Wires, breadboard or perfboard | For the buttons circuit |
-| (later) 3D printed enclosure | Not addressed in this phase — see `hardware/` for pinout to design around |
+- `yolo11n-seg.pt` is a generic development segmentation model, not a container-trained model
+- the risk model is disabled by default and has no final project taxonomy
+- barcode/OCR identity handling is not finalized
+- fusion is an explainable heuristic and has not been evaluated on a representative image set
+- decision behavior is provisional and still needs operational approval
+- startup validation for every hardware and data dependency is incomplete
+- Raspberry Pi performance, camera placement, lighting, and systemd behavior require hardware validation
+- session logging still needs a final retention and audit policy
 
-### 2.2 Buttons
+A successful smoke test proves that the code path runs. It does not prove that the model recognizes containers or that an automatic decision is safe.
 
-Two physical buttons drive the entire workflow as a simple state machine:
+## Repository layout
 
-- **Button A — CAPTURE**: takes a picture from the webcam, freezes it on
-  screen. Pressing it again while a picture is displayed (before validating)
-  retakes the picture.
-- **Button B — VALIDATE**: has a dual role depending on the current state of
-  the state machine (see §4):
-  - When a **raw picture** is on screen → confirms it should be sent to the
-    analysis pipeline.
-  - When the **annotated/decision picture** is on screen → confirms
-    (accepts) the automatic decision. A **long press** (or a future 3rd
-    button, configurable) rejects the decision and sends the operator back
-    to CAPTURE.
-
-GPIO pins are configurable in `config/settings.py`, default:
-- `BUTTON_CAPTURE_PIN = 17`
-- `BUTTON_VALIDATE_PIN = 27`
-
-Wiring: each button between the GPIO pin and GND, using the Pi's internal
-pull-up resistor (`GPIO.PUD_UP`), so a press reads `LOW`. Debounce is handled
-in software (`hardware/buttons.py`).
-
-### 2.3 Display
-
-The display is driven as a normal desktop window (OpenCV `imshow` window,
-full-screen). This keeps the code screen-agnostic — it works identically on
-an HDMI monitor, an official touchscreen, or a small HDMI TFT. If the actual
-screen ends up being SPI-only (no framebuffer/X11), `hardware/display.py` is
-the only file that needs to change (e.g. swap to `luma.lcd` or `pygame` with
-`fbcon`).
-
-### 2.4 3D printed box
-
-Not needed yet per current scope. Once the screen/case are chosen precisely,
-add a parametric OpenSCAD file under `hardware/enclosure/` with cutouts for:
-camera, screen, 2 buttons, cable routing, ventilation for the Pi.
-
----
-
-## 3. Data model
-
-### 3.1 The LCD (shipment reference list)
-
-"LCD" = the truck's declared load list, given to us as a **raw CSV** that
-contains a lot of irrelevant columns. `pipeline/lcd_formatter.py` converts it
-into a clean JSON keeping only:
-
-- `reference_number` — the shipment reference id,
-- `container_number` — the container this reference is loaded in,
-- a handful of other useful fields (quantity, description, weight — exact
-  list is a `#TODO`, see the file).
-
-Example output (`data/lcd/example_lcd.json`, generated from
-`data/lcd/example_lcd.csv`):
-
-```json
-[
-  {
-    "reference_number": "REF-00231",
-    "container_number": "MSCU1234567",
-    "description": "Machine parts",
-    "quantity": 12,
-    "weight_kg": 340.5
-  }
-]
+```text
+.
+├── README.md                    Project reference
+├── TODO                         Detailed remaining implementation work
+├── .gitignore                   Local/runtime exclusions
+├── config/
+│   ├── __init__.py
+│   ├── settings.py              Central runtime configuration
+│   ├── requirements.txt         Python dependencies
+│   ├── hardware/
+│   │   ├── buttons.py           GPIO and keyboard button controller
+│   │   ├── camera.py            OpenCV camera wrapper
+│   │   └── display.py           OpenCV display wrapper
+│   └── models_weights/
+│       └── yolo11n-seg.pt       Development segmentation weight
+├── srcs/
+│   ├── __init__.py
+│   ├── app/
+│   │   ├── main.py              Interactive application entry point
+│   │   ├── gui.py               Event loop and input wiring
+│   │   └── state_machine.py     Capture/analyze/validation workflow
+│   ├── models/
+│   │   ├── segmentation_model.py
+│   │   ├── risk_model.py
+│   │   └── barcode_model.py
+│   ├── pipeline/
+│   │   ├── lcd_formatter.py     CSV normalization and JSON loading
+│   │   ├── fusion.py             Detection-to-declaration matching
+│   │   ├── decision.py           Action/selection policy
+│   │   └── draw.py               Annotated image generation
+│   └── utils/
+│       ├── geometry.py            Shared dataclasses and bounding boxes
+│       └── logger.py              Console/file/session logging
+├── data/
+│   ├── containers_db.json         Example container metadata
+│   ├── lcd/
+│   │   ├── example_lcd.csv       Example declaration input
+│   │   └── example_lcd.json      Example normalized declaration
+│   ├── captures/                  Runtime accepted/rejected sessions
+│   └── logs/                      Runtime application and test logs
+├── tests/
+│   ├── test_lcd_formatter.py     LCD and basic decision tests
+│   ├── test_pipeline_logic.py    Geometry/fusion/decision tests
+│   └── run_test.py                Detailed camera/file pipeline diagnostic
+└── Collab/                       Training notebooks and research work
 ```
 
-### 3.2 Container reference database
+The local `setup.md` file is intentionally ignored by Git. It contains machine-specific installation notes and deployment values and should not be treated as portable project documentation.
 
-A separate, mostly-static JSON (`data/containers_db.json`) maps a
-**container number** to its physical characteristics (dimensions, type,
-tare weight, ISO code, etc.). This is looked up by the fusion algorithm once
-it has a candidate container number (read from a barcode, or inferred).
+## Software architecture
+
+```text
+Camera or image file
+        |
+        v
+Capture/input frame
+        |
+        +--> segmentation_model.py  -> container/instance detections
+        +--> risk_model.py           -> optional risk detections
+        +--> barcode_model.py        -> optional barcode detections
+        |
+        v
+fusion.py
+  combines detections, LCD records, and container database
+        |
+        v
+decision.py
+  determines review/selection behavior
+        |
+        v
+draw.py
+  renders boxes, labels, and explanations
+        |
+        v
+Display or saved annotated image
+```
+
+The interactive application injects the camera, display, model wrappers, LCD records, and container database into the state machine. This keeps the workflow testable without requiring hardware in every unit test.
+
+## Interactive application lifecycle
+
+`srcs/app/state_machine.py` implements four states.
+
+### `IDLE`
+
+The application is waiting for a capture action and displays a ready message.
+
+### `PICTURE_TAKEN`
+
+A frame has been captured and frozen on screen.
+
+- CAPTURE takes a new frame and replaces the current one.
+- VALIDATE sends the frame to analysis.
+
+### `ANALYZING`
+
+The application runs the configured stages:
+
+1. risk prediction, if enabled
+2. segmentation prediction
+3. barcode prediction, if enabled
+4. fusion
+5. decision
+6. drawing
+
+The display shows an analysis message while this work runs.
+
+### `RESULT_SHOWN`
+
+The annotated image is displayed.
+
+- short VALIDATE accepts and saves the result
+- long VALIDATE rejects and saves the result as rejected
+- keyboard `r` simulates rejection in mock mode
+
+The `q` key quits the application in keyboard mode.
+
+## Hardware and input behavior
+
+The default GPIO configuration uses BCM numbering:
+
+- capture button: GPIO 17
+- validate button: GPIO 27
+- wiring: button between GPIO pin and GND
+- input mode: internal pull-up, therefore pressed means LOW
+
+The validate button has two meanings:
+
+- short press: confirm the current stage
+- long press: reject a displayed result
+
+On a development computer, `MOCK_HARDWARE=1` uses keyboard input instead of GPIO:
+
+- `c`: capture
+- `v`: validate
+- `r`: reject
+- `q`: quit
+
+OpenCV must continue receiving `waitKey` calls for the display window and keyboard fallback to work.
+
+Concrete operating-system installation, GPIO wiring, camera setup, display setup, systemd service, and troubleshooting instructions belong in the local ignored [setup.md](setup.md).
+
+## Models
+
+### Segmentation model
+
+`srcs/models/segmentation_model.py` loads an Ultralytics segmentation model and converts its output into `SegmentationInstance` objects containing:
+
+- stable instance id for the current frame
+- model class name
+- confidence
+- pixel bounding box
+- optional mask array
+
+The default configured weight is:
+
+```text
+config/models_weights/yolo11n-seg.pt
+```
+
+This model is present for software smoke testing. Its generic classes must not be interpreted as a validated container detector. A future production model must be trained on the target container images and its class names must be recorded in `config/settings.py`.
+
+Override the path without editing code:
+
+```bash
+SEGMENTATION_MODEL_WEIGHTS=/path/to/container-segmentation.pt \
+python3 tests/run_test.py --mode 0 --image path/to/image.jpg
+```
+
+### Risk/object detection model
+
+`srcs/models/risk_model.py` is an optional Ultralytics object detector wrapper. It returns `RiskDetection` objects with a label, confidence, and bounding box.
+
+It is disabled by default:
+
+```text
+ENABLE_RISK_MODEL=False
+```
+
+This is intentional. Until a real risk model and severity policy exist, the application must not imply that it can detect safety or security risks. Enable it only after configuring and validating a compatible model.
+
+### Barcode model
+
+`srcs/models/barcode_model.py` optionally combines a YOLO localizer with `pyzbar` decoding. It returns the decoded value, symbology, confidence, and bounding box.
+
+The final project must decide whether container identity will come from:
+
+- a machine-readable barcode
+- OCR of the printed ISO 6346 container code
+- both, with a defined precedence and fallback
+
+The current barcode wrapper is not a substitute for that decision.
+
+## Data contracts
+
+### LCD declaration data
+
+The LCD is the declared shipment list. The raw CSV is normalized by `srcs/pipeline/lcd_formatter.py` into records containing:
 
 ```json
 {
-  "MSCU1234567": {
-    "type": "20ft dry",
-    "length_mm": 6058,
-    "width_mm": 2438,
-    "height_mm": 2591,
-    "tare_weight_kg": 2300
-  }
+  "reference_number": "REF-00231",
+  "container_number": "MSCU1234567",
+  "description": "Example cargo",
+  "quantity": 12,
+  "weight_kg": 340.5
 }
 ```
 
-### 3.3 Model outputs (contracts between pipeline stages)
+The formatter:
 
-To keep every stage independently testable, all model wrappers return plain
-Python dicts / dataclasses with a fixed shape — see `utils/geometry.py` and
-the docstrings in each `models/*.py` file for the exact schema
-(`RiskDetection`, `SegmentationInstance`, `BarcodeDetection`).
+- reads the CSV header using `csv.DictReader`
+- checks that the required columns exist
+- converts quantity and weight when possible
+- skips rows without a reference or container number
+- writes normalized JSON when requested
 
----
+The current declaration can be placed at `data/lcd/current_lcd.json`. If it is absent, the application uses `data/lcd/example_lcd.json`.
 
-## 4. Software architecture
+### Container database
 
-```
-Webcam ──▶ hardware/camera.py
-                     │
-             app/state_machine.py  ◀── hardware/buttons.py (2 GPIO buttons)
-                     │
-             hardware/display.py  (shows raw pic / result pic)
-                     │
-      ┌──────────────┼───────────────────────┐
-      ▼               ▼                        ▼
-models/risk_model  models/segmentation_model  models/barcode_model
-      │               │                        │
-      │               └─────────┬──────────────┘
-      │                         ▼
-      │              pipeline/fusion.py  ◀── pipeline/lcd_formatter.py (CSV→JSON)
-      │                         │          ◀── data/containers_db.json
-      │                         ▼
-      └───────────────▶ pipeline/decision.py
-                                 │
-                                 ▼
-                         pipeline/draw.py
-                                 │
-                                 ▼
-                        hardware/display.py (annotated result)
-                                 │
-                     operator presses VALIDATE (accept/reject)
-```
+`data/containers_db.json` maps a container number to physical metadata. Current example fields include:
 
-### 4.1 State machine
+- type
+- length in millimeters
+- width in millimeters
+- height in millimeters
+- tare weight
+- maximum payload
 
-`app/state_machine.py` implements the following states (also documented
-inline in the file):
+The fusion algorithm uses this metadata as supporting evidence. It is not a replacement for camera calibration or a reliable identity reading.
 
-1. `IDLE` — waiting, showing a live-ish placeholder or the last result.
-2. `PICTURE_TAKEN` — a raw frame is frozen on screen, waiting for VALIDATE
-   (confirm → go to `ANALYZING`) or CAPTURE (retake → stay in
-   `PICTURE_TAKEN`).
-3. `ANALYZING` — pipeline is running (risk + segmentation + barcode + LCD +
-   fusion + decision + draw). Screen shows a "processing" placeholder.
-4. `RESULT_SHOWN` — annotated picture is on screen with the decision
-   (selection zone + explanation text). Waiting for VALIDATE (accept → log
-   + save + back to `IDLE`) or reject (back to `IDLE`/`PICTURE_TAKEN`,
-   configurable).
+### Shared geometry objects
 
-### 4.2 Pipeline stages, in detail
+`srcs/utils/geometry.py` defines the interfaces between stages:
 
-1. **Risk model** (`models/risk_model.py`) — a YOLO(-style) detector,
-   already trained, that looks at the whole picture and flags "risk" zones
-   / labels (open flames, damaged packaging, hazmat symbols, etc. — the
-   exact taxonomy is whatever the model was trained on). Output: a list of
-   `RiskDetection(label, confidence, bbox)`.
+- `BBox`: pixel coordinate rectangle with area, center, containment, and IoU
+- `RiskDetection`: one risk/object detection
+- `SegmentationInstance`: one segmented model instance
+- `BarcodeDetection`: one decoded/localized barcode
+- `ContainerMatch`: one instance-to-declaration association
+- `Decision`: one output action/selection result
 
-2. **Segmentation model** (`models/segmentation_model.py`) — an Ultralytics
-   instance-segmentation model (YOLOv8/11-seg) that finds every **container
-   instance** in the picture and returns a class + a pixel mask + bbox per
-   instance.
+Keeping these contracts centralized allows pipeline tests to use synthetic objects without loading YOLO weights.
 
-3. **Barcode model** (`models/barcode_model.py`) — localizes barcodes in the
-   image (bbox) then decodes them (via `pyzbar`/`opencv` barcode detector).
-   Returns `BarcodeDetection(value, symbology, bbox, confidence)`.
+## Pipeline behavior
 
-4. **LCD formatter** (`pipeline/lcd_formatter.py`) — CSV → JSON as described
-   in §3.1. Runs once per truck/load (not necessarily once per picture —
-   configurable, see file).
+### LCD formatting
 
-5. **Fusion algorithm** (`pipeline/fusion.py`) — this is the core
-   "reasoning" piece and is intentionally left as a well-scaffolded
-   `#TODO`: it must associate each segmented container **instance** (from
-   step 2) with a **declared reference / container number** (from step 4),
-   using the barcode reading (step 3) as the strongest signal when
-   available (barcode bbox is contained in / overlaps a segmentation
-   instance → very high confidence match) and falling back to weaker
-   heuristics (dimensions from `containers_db.json` vs. apparent size in
-   image, count of expected containers vs. detected instances, etc.) when
-   no barcode is readable on a given instance. Output: a probabilistic
-   association table — for each detected instance, a ranked list of
-   candidate references with a confidence score.
+The LCD formatter runs once per declaration input, not necessarily once per image. It creates the normalized records used by fusion.
 
-6. **Decision algorithm** (`pipeline/decision.py`) — combines the fusion
-   output with the risk output to decide, per picture:
-   - a **selection zone** to extract: `(x, y, width, height)`,
-   - a **confidence weight**,
-   - a **human-readable explanation** (why this zone, why this decision —
-     e.g. "container MSCU1234567 flagged: barcode confirms reference
-     REF-00231 (declared: machine parts, 340.5kg) but risk model detected
-     a hazmat symbol at 92% confidence inside this container's mask").
-   This is the second big `#TODO` — the decision logic (thresholds, rules,
-   how risk + fusion combine into one weight) needs your business rules.
+### Fusion
 
-7. **Draw** (`pipeline/draw.py`) — purely mechanical: draws the selection
-   rectangle, risk boxes/labels, and the explanation text onto a copy of the
-   original image, ready to display.
+`srcs/pipeline/fusion.py` currently uses weighted evidence:
 
-### 4.3 Why a "fusion" stage at all?
+1. barcode overlap and matching container number are the strongest signal
+2. apparent bounding-box ratio versus database dimensions is a weak signal
+3. detected count versus declared container count is a weak global signal
 
-A barcode is not always readable (blur, angle, occlusion), and the
-declared LCD doesn't tell you *where* in the picture a given reference is.
-Fusion is what lets the system say "I'm 87% sure this segmented blob is
-container MSCU1234567" even when the barcode is unreadable, by combining
-partial evidence. This is standard **data fusion / evidence combination**
-territory — naive Bayes weighted scoring, Dempster-Shafer belief
-combination, or a simple rule-based scoring system are all reasonable
-approaches; see the `#TODO` in `pipeline/fusion.py` for a proposed simple
-implementation you can start from and refine.
+The current behavior is deliberately conservative when no usable barcode matches an LCD container: the instance remains unresolved and receives no confident identity. This is an interim heuristic and is documented for replacement in [TODO](TODO).
 
----
+Important unresolved cases include duplicate container claims, conflicting barcode values, barcode values absent from the LCD, several references in one container, and no-barcode images.
 
-## 5. Project layout
+### Decision
 
-```
-container_inspection/
-├── README.md                     ← this file
-├── requirements.txt
-├── config/
-│   └── settings.py                GPIO pins, camera index, paths, thresholds
-├── hardware/
-│   ├── camera.py                  webcam capture (OpenCV)
-│   ├── buttons.py                 GPIO buttons with debounce + callbacks
-│   └── display.py                 fullscreen window abstraction
-├── data/
-│   ├── lcd/
-│   │   ├── example_lcd.csv        sample raw truck CSV
-│   │   └── example_lcd.json       generated output (example)
-│   ├── containers_db.json         container number → dimensions etc.
-│   └── captures/                  runtime: saved pictures + results (gitignored)
-├── models/
-│   ├── risk_model.py              risk detector wrapper
-│   ├── segmentation_model.py      container instance segmentation wrapper
-│   ├── barcode_model.py           barcode localisation + decoding wrapper
-│   └── weights/                   .pt weight files go here (not versioned)
-├── pipeline/
-│   ├── lcd_formatter.py           CSV → JSON
-│   ├── fusion.py                  fuse segmentation + barcode + LCD
-│   ├── decision.py                risk + fusion → decision
-│   └── draw.py                    decision → annotated image
-├── app/
-│   ├── state_machine.py           the 4-state workflow
-│   ├── gui.py                     glue between buttons/display/state machine
-│   └── main.py                    entry point
-├── utils/
-│   ├── logger.py
-│   └── geometry.py                shared dataclasses / bbox helpers
-└── tests/
-    └── test_lcd_formatter.py      example unit test to build on
-```
+`srcs/pipeline/decision.py` associates risks with overlapping instances and calculates a decision weight. The current prototype can:
 
----
+- select a leftmost sufficiently large instance
+- mark a high-confidence overlapping risk as a security risk
+- mark low-confidence/unmatched fusion as manual-review-like behavior
+- produce a human-readable explanation
 
-## 6. Open points to settle before going further (tracked as `#TODO` in code)
+This is not yet a final policy. In particular, the current leftmost strategy can stop after one instance, and the final system must evaluate all instances before selecting the primary UI result.
 
-1. **§6.1 Model weights** — you said the models already exist: drop the
-   `.pt` (or `.onnx`/`.engine`) files into `models/weights/` and fill in the
-   paths + class names in `config/settings.py`.
-2. **§6.2 Risk taxonomy** — list the exact risk classes your model was
-   trained on so `pipeline/decision.py` can map "risk label" → "how severe
-   / does it force a rejection".
-3. **§6.3 Barcode symbology** — confirm whether it's a standard barcode
-   (EAN/Code128/QR) or the ISO 6346 container code printed as text/OCR
-   rather than a scannable barcode; this changes `models/barcode_model.py`
-   significantly (barcode decoding vs. OCR).
-4. **§6.4 Fusion scoring** — the proposed default in `pipeline/fusion.py` is
-   a simple weighted-evidence scorer; replace/tune once you know how
-   reliable each signal (barcode, dimensions, count) is in practice.
-5. **§6.5 Decision thresholds** — what confidence triggers an automatic
-   "reject"/"select for extraction" vs. "needs manual review"?
+### Drawing
 
----
+`srcs/pipeline/draw.py` does not make decisions. It draws:
 
-## 7. Running it
+- selection rectangles
+- matched container labels
+- risk rectangles and labels
+- an explanation panel below the image
+
+The original input image is copied before drawing.
+
+## Running the project
+
+All commands below are run from the repository root.
+
+### Install dependencies
+
+The dependency list is in `config/requirements.txt`. Use a virtual environment. The complete Raspberry Pi procedure is in the ignored `setup.md`.
 
 ```bash
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Generate the LCD json from a CSV once per truck:
-python -m pipeline.lcd_formatter data/lcd/example_lcd.csv data/lcd/example_lcd.json
-
-# Run the app (needs a webcam + screen + buttons wired up; on a dev machine
-# without GPIO, set MOCK_HARDWARE=1 to use keyboard keys instead of buttons):
-MOCK_HARDWARE=1 python -m app.main
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r config/requirements.txt
 ```
 
-## 8. Dev without a Raspberry Pi
+### Run tests
 
-`config/settings.py` exposes `MOCK_HARDWARE`. When true, `hardware/buttons.py`
-falls back to keyboard keys (`c` = capture, `v` = validate) instead of GPIO,
-so the whole pipeline can be developed and tested on a laptop before
-touching real hardware.
+```bash
+python3 -m pytest -q
+python3 tests/test_pipeline_logic.py
+```
+
+The tests are deterministic and do not require a camera, GPIO, or model weights.
+
+### Run the interactive application
+
+Keyboard development mode:
+
+```bash
+MOCK_HARDWARE=1 python3 -m srcs.app.main
+```
+
+Raspberry hardware mode:
+
+```bash
+python3 -m srcs.app.main
+```
+
+### Run the diagnostic pipeline test
+
+`tests/run_test.py` is a non-interactive one-shot runner. It uses the same segmentation, LCD, fusion, decision, and drawing stages but does not require the GUI state machine.
+
+Mode `1` captures an image from the camera:
+
+```bash
+python3 tests/run_test.py --mode 1
+```
+
+Mode `0` uses the newest supported image found recursively under `data/captures`:
+
+```bash
+python3 tests/run_test.py --mode 0
+```
+
+Mode `0` with a specific image:
+
+```bash
+python3 tests/run_test.py --mode 0 --image path/to/image.jpg
+```
+
+Useful options:
+
+```bash
+python3 tests/run_test.py --help
+python3 tests/run_test.py --mode 1 --camera-index 1
+python3 tests/run_test.py --mode 0 --weights path/to/model.pt
+python3 tests/run_test.py --mode 0 --decision-strategy all
+```
+
+Each run is stored under:
+
+```text
+data/logs/run_test/<run-id>/
+├── input.jpg
+├── annotated.jpg
+├── run_test.log
+└── report.json
+```
+
+The report records configuration, data sources, image metadata, model loading, timings, detections, risk/barcode status, fusion matches, decisions, output paths, and full traceback information on failure.
+
+## Runtime storage and logging
+
+### Captures
+
+The interactive state machine saves accepted or rejected sessions under:
+
+```text
+data/captures/<timestamp>/
+├── raw.jpg
+├── annotated.jpg
+└── summary.json
+```
+
+### Application logs
+
+The configured application logger writes rotating logs and session events under `data/logs/`. The diagnostic runner creates an isolated directory per run. Runtime files are ignored by Git.
+
+The current logger is a debugging and prototype audit baseline. Before deployment, add or finalize:
+
+- one session id per inspection
+- UTC timestamps for every stage
+- model filename and hash
+- LCD source/version
+- inference durations
+- all candidate fusion evidence
+- final decision and operator action
+- retention and image privacy rules
+
+## Configuration reference
+
+Configuration is centralized in `config/settings.py`.
+
+### Runtime switches
+
+- `RUN_MODE`: `0` hardware mode, `1` development mode
+- `MOCK_HARDWARE`: keyboard fallback when true
+- `ENABLE_YOLO`: enable segmentation model loading
+- `ENABLE_RISK_MODEL`: enable optional risk detector
+- `ENABLE_BARCODE_MODEL`: enable barcode localizer/decoder
+- `ENABLE_FUSION`: enable matching stage
+- `ENABLE_DECISION`: enable decision stage
+- `DECISION_STRATEGY`: current `leftmost` or `all`
+
+Most switches can be overridden with environment variables. Model paths can be overridden with `SEGMENTATION_MODEL_WEIGHTS` and `RISK_MODEL_WEIGHTS`.
+
+### Hardware values
+
+- `CAMERA_INDEX`
+- `CAMERA_WIDTH`
+- `CAMERA_HEIGHT`
+- `CAMERA_WARMUP_FRAMES`
+- `BUTTON_CAPTURE_PIN`
+- `BUTTON_VALIDATE_PIN`
+- `BUTTON_DEBOUNCE_MS`
+- `BUTTON_LONG_PRESS_MS`
+- `DISPLAY_FULLSCREEN`
+
+### Data paths
+
+- `DATA_DIR`
+- `CAPTURES_DIR`
+- `CONTAINERS_DB_PATH`
+- `CURRENT_LCD_JSON_PATH`
+- `EXAMPLE_LCD_JSON_PATH`
+- `LOG_DIR`
+- `RESULTS_LOG_PATH`
+- `SESSION_LOG_PATH`
+
+The values are derived from the repository root; avoid hardcoding absolute paths into application modules.
+
+## Development model and production model
+
+The repository supports an incremental workflow:
+
+1. Run the generic segmentation model to validate software integration.
+2. Test with recorded images using `tests/run_test.py --mode 0`.
+3. Collect and label representative container images.
+4. Train a container-specific segmentation model.
+5. Decide barcode versus OCR identity.
+6. Implement and measure fusion behavior.
+7. Define and test the decision policy.
+8. Validate the complete workflow on the target Raspberry Pi.
+9. Enable automatic startup only after manual hardware tests succeed.
+
+The generic model should never be used as evidence that the final model is accurate.
+
+## Documentation map
+
+- [README.md](README.md): project architecture, behavior, data contracts, commands, and limitations
+- [TODO](TODO): detailed remaining implementation work and acceptance criteria
+- `setup.md`: local ignored machine-specific installation and Raspberry Pi deployment notes
+- `Collab/`: model-training notebooks and experiments
+
+## Project completion criteria
+
+The system is ready for a real deployment only when:
+
+- startup validates required files and hardware configuration
+- a container-trained model has been evaluated on held-out scenes
+- identity extraction has measured false-match and unresolved rates
+- fusion handles conflicts and ambiguity explicitly
+- decision policy is approved and covered by tests
+- disabled risk mode cannot create a security rejection
+- all detected instances are considered before primary selection
+- session records are structured and retained according to policy
+- Raspberry camera, display, buttons, performance, restart, and failure paths are validated

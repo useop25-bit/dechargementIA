@@ -1,0 +1,38 @@
+# Local Python environments
+dechargementIA/
+.venv/
+venv/
+env/
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime output
+data/logs/*
+!data/logs/.gitkeep
+data/captures/*
+!data/captures/.gitkeep
+data/lcd/current_lcd.json
+
+# Local model weights
+*.pt
+*.onnx
+*.engine
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Local machine setup notes
+setup.md

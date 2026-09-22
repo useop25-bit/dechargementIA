@@ -3,47 +3,44 @@ Wrapper around the barcode detection pipeline: localize barcode(s) in the
 picture, then decode each one, so downstream code has both *where* the code
 is (to cross-reference with a segmented container instance) and *what it
 says* (to cross-reference with the LCD / containers_db).
-
-# TODO(symbology): you weren't sure yet whether this is a standard scannable
-# barcode/QR or the ISO 6346 container code printed as plain text on the
-# container door (which would need OCR, not barcode decoding). This wrapper
-# currently assumes a real scannable barcode (via pyzbar) localized by your
-# trained "barcode_localizer" YOLO model. If it turns out to be printed text
-# instead:
-#   1. Replace the `_decode_region` method's pyzbar call with an OCR call
-#      (e.g. easyocr, pytesseract, or a custom OCR model),
-#   2. Set `symbology="OCR-ISO6346"` on the resulting BarcodeDetection,
-#   3. Optionally validate the OCR result against the ISO 6346 check-digit
-#      algorithm to reject obviously wrong reads (a #TODO worth adding once
-#      you confirm this path — happy to write that validator on request).
 """
 
 from __future__ import annotations
 
-import cv2
-import numpy as np
-from pyzbar import pyzbar
-from ultralytics import YOLO
+from typing import Any
 
 from config import settings
-from utils.geometry import BBox, BarcodeDetection
-from utils.logger import get_logger
+from srcs.utils.geometry import BBox, BarcodeDetection
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
 
 
 class BarcodeModel:
     def __init__(self, weights_path=settings.BARCODE_MODEL_WEIGHTS) -> None:
+        self._localizer = None
+        if not settings.ENABLE_BARCODE_MODEL:
+            log.info("Barcode model disabled by ENABLE_BARCODE_MODEL")
+            return
+        import cv2
+        from pyzbar import pyzbar
+        from ultralytics import YOLO
+
+        self._cv2 = cv2
+        self._pyzbar = pyzbar
         log.info("Loading barcode localizer model from %s", weights_path)
         self._localizer = YOLO(str(weights_path))
 
-    def predict(self, image: np.ndarray) -> list[BarcodeDetection]:
+    def predict(self, image: Any) -> list[BarcodeDetection]:
         """
         Localize candidate barcode regions with the trained detector, then
         decode each cropped region with pyzbar. Falls back to scanning the
         whole image with pyzbar if the localizer finds nothing (better a
         slow full-image scan than silently missing a readable code).
         """
+        if self._localizer is None:
+            return []
+
         detections: list[BarcodeDetection] = []
 
         results = self._localizer.predict(
@@ -78,7 +75,7 @@ class BarcodeModel:
         log.info("Barcode model decoded %d code(s)", len(detections))
         return detections
 
-    def _decode_region(self, image: np.ndarray, bbox: BBox) -> tuple[str, str] | None:
+    def _decode_region(self, image: Any, bbox: BBox) -> tuple[str, str] | None:
         # small margin around the box helps pyzbar with quiet-zone requirements
         margin = 10
         x1 = max(0, bbox.x - margin)
@@ -90,17 +87,17 @@ class BarcodeModel:
         if crop.size == 0:
             return None
 
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        codes = pyzbar.decode(gray)
+        gray = self._cv2.cvtColor(crop, self._cv2.COLOR_BGR2GRAY)
+        codes = self._pyzbar.decode(gray)
         if not codes:
             return None
 
         code = codes[0]
         return code.data.decode("utf-8", errors="replace"), code.type
 
-    def _full_image_fallback(self, image: np.ndarray) -> list[BarcodeDetection]:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        codes = pyzbar.decode(gray)
+    def _full_image_fallback(self, image: Any) -> list[BarcodeDetection]:
+        gray = self._cv2.cvtColor(image, self._cv2.COLOR_BGR2GRAY)
+        codes = self._pyzbar.decode(gray)
 
         detections = []
         for code in codes:

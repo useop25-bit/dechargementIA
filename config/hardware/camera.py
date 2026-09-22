@@ -12,14 +12,12 @@ import cv2
 import numpy as np
 
 from config import settings
-from utils.logger import get_logger
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
 class CameraError(RuntimeError):
     pass
-
 
 class Camera:
     def __init__(

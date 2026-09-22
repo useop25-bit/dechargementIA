@@ -5,10 +5,10 @@ algorithm needs: reference_number, container_number, and a few extra useful
 fields.
 
 Usage:
-    python -m pipeline.lcd_formatter <input.csv> <output.json>
+    python -m srcs.pipeline.lcd_formatter <input.csv> <output.json>
 
 Or programmatically:
-    from pipeline.lcd_formatter import format_lcd_csv
+    from srcs.pipeline.lcd_formatter import format_lcd_csv
     records = format_lcd_csv("data/lcd/example_lcd.csv")
 """
 
@@ -21,15 +21,10 @@ from pathlib import Path
 from typing import Any
 
 from config import settings
-from utils.logger import get_logger
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# #TODO: confirm against the *real* CSV export from your source system —
-# this example was built from a plausible-looking freight CSV. Update the
-# left-hand keys to match your actual CSV header names exactly (case
-# sensitive). The right-hand values are the clean output field names and
-# must match settings.LCD_OUTPUT_FIELDS.
 LCD_CSV_COLUMN_MAP: dict[str, str] = {
     "reference_number": "reference_number",
     "container_number": "container_number",
@@ -40,7 +35,6 @@ LCD_CSV_COLUMN_MAP: dict[str, str] = {
 
 # Columns that should be parsed as numbers rather than left as strings.
 _NUMERIC_FIELDS = {"quantity", "weight_kg"}
-
 
 def _coerce(field_name: str, raw_value: str) -> Any:
     raw_value = (raw_value or "").strip()
@@ -55,7 +49,6 @@ def _coerce(field_name: str, raw_value: str) -> Any:
             log.warning("Could not parse numeric field %s=%r, keeping as string", field_name, raw_value)
             return raw_value
     return raw_value
-
 
 def format_lcd_csv(csv_path: str | Path) -> list[dict[str, Any]]:
     """
@@ -76,7 +69,7 @@ def format_lcd_csv(csv_path: str | Path) -> list[dict[str, Any]]:
             raise ValueError(
                 f"CSV is missing expected columns {missing_columns}. "
                 f"Found columns: {reader.fieldnames}. "
-                f"Update LCD_CSV_COLUMN_MAP in pipeline/lcd_formatter.py "
+                f"Update LCD_CSV_COLUMN_MAP in srcs/pipeline/lcd_formatter.py "
                 f"to match your real CSV headers (see #TODO)."
             )
 
@@ -99,7 +92,6 @@ def format_lcd_csv(csv_path: str | Path) -> list[dict[str, Any]]:
     log.info("Formatted %d LCD records from %s", len(records), csv_path)
     return records
 
-
 def write_lcd_json(records: list[dict[str, Any]], output_path: str | Path) -> None:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,21 +99,18 @@ def write_lcd_json(records: list[dict[str, Any]], output_path: str | Path) -> No
         json.dump(records, f, indent=2, ensure_ascii=False)
     log.info("Wrote %s", output_path)
 
-
 def load_lcd_json(json_path: str | Path = settings.CURRENT_LCD_JSON_PATH) -> list[dict[str, Any]]:
     with Path(json_path).open(encoding="utf-8") as f:
         return json.load(f)
 
-
 def _main() -> None:
     if len(sys.argv) != 3:
-        print("Usage: python -m pipeline.lcd_formatter <input.csv> <output.json>")
+        print("Usage: python -m srcs.pipeline.lcd_formatter <input.csv> <output.json>")
         sys.exit(1)
 
     input_csv, output_json = sys.argv[1], sys.argv[2]
     records = format_lcd_csv(input_csv)
     write_lcd_json(records, output_json)
-
 
 if __name__ == "__main__":
     _main()

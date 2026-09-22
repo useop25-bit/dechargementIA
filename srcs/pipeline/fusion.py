@@ -49,8 +49,8 @@ from __future__ import annotations
 from collections import defaultdict
 
 from config import settings
-from utils.geometry import BarcodeDetection, ContainerMatch, SegmentationInstance
-from utils.logger import get_logger
+from srcs.utils.geometry import BarcodeDetection, ContainerMatch, SegmentationInstance
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
 

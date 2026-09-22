@@ -26,10 +26,9 @@ import time
 from typing import Callable, Optional
 
 from config import settings
-from utils.logger import get_logger
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
-
 
 class ButtonController:
     def __init__(
@@ -57,7 +56,6 @@ class ButtonController:
     # ------------------------------------------------------------------
     # Real GPIO backend
     # ------------------------------------------------------------------
-
     def _setup_gpio(self) -> None:
         import RPi.GPIO as GPIO  # imported lazily: not installed off-Pi
 
@@ -116,7 +114,6 @@ class ButtonController:
     # ------------------------------------------------------------------
     # Keyboard mock backend — called from hardware/display.py's event loop
     # ------------------------------------------------------------------
-
     def handle_key(self, key: str) -> None:
         """Feed a keypress (as returned by cv2.waitKey) when MOCK_HARDWARE."""
         if key == settings.MOCK_KEY_CAPTURE:

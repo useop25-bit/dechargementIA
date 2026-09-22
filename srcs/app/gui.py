@@ -11,13 +11,12 @@ keyboard mock backend gets key events routed to the buttons controller.
 from __future__ import annotations
 
 from config import settings
-from hardware.buttons import ButtonController
-from hardware.display import Display
-from app.state_machine import StateMachine
-from utils.logger import get_logger
+from config.hardware.buttons import ButtonController
+from config.hardware.display import Display
+from srcs.app.state_machine import StateMachine
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
-
 
 class App:
     def __init__(self, state_machine: StateMachine, display: Display) -> None:
