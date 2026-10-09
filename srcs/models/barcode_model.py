@@ -54,6 +54,8 @@ separate model from this one. Happy to build that next if useful.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import cv2
 import numpy as np
 from pyzbar import pyzbar
@@ -95,6 +97,47 @@ def _pyzbar_to_detection(code: "pyzbar.Decoded", offset: tuple[int, int] = (0, 0
     )
 
 
+def _restore_scaled_bbox(detection: BarcodeDetection, scale: float) -> BarcodeDetection:
+    bbox = detection.bbox
+    return replace(
+        detection,
+        bbox=BBox(
+            x=round(bbox.x / scale),
+            y=round(bbox.y / scale),
+            width=round(bbox.width / scale),
+            height=round(bbox.height / scale),
+        ),
+    )
+
+
+def _restore_affine_bbox(
+    detection: BarcodeDetection,
+    inverse_matrix: np.ndarray,
+    image_shape: tuple[int, int],
+) -> BarcodeDetection:
+    bbox = detection.bbox
+    corners = np.array(
+        [[
+            [bbox.x, bbox.y],
+            [bbox.x2, bbox.y],
+            [bbox.x2, bbox.y2],
+            [bbox.x, bbox.y2],
+        ]],
+        dtype=np.float32,
+    )
+    original_corners = cv2.transform(corners, inverse_matrix)[0]
+    height, width = image_shape
+    x1 = max(0, int(np.floor(original_corners[:, 0].min())))
+    y1 = max(0, int(np.floor(original_corners[:, 1].min())))
+    x2 = min(width, int(np.ceil(original_corners[:, 0].max())))
+    y2 = min(height, int(np.ceil(original_corners[:, 1].max())))
+
+    return replace(
+        detection,
+        bbox=BBox(x=x1, y=y1, width=max(0, x2 - x1), height=max(0, y2 - y1)),
+    )
+
+
 class BarcodeModel:
     """
     Reads every CODE128 barcode in an image (or a region of it) and returns
@@ -130,15 +173,22 @@ class BarcodeModel:
         """
         Enhancement variants empirically found useful when testing on a real
         (blurred/skewed) label photo. Order matters: cheapest/most likely
-        first. Stops as soon as a variant finds something new; merges
-        unique results across variants by raw decoded value so the same
-        barcode isn't returned twice.
+        first. All variants are tried and unique results are merged by raw
+        decoded value so the same barcode isn't returned twice.
         """
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
         found: dict[str, BarcodeDetection] = {}
 
-        def add_all(detections: list[BarcodeDetection]) -> None:
+        def add_all(
+            detections: list[BarcodeDetection],
+            inverse_matrix: np.ndarray | None = None,
+            scale: float = 1.0,
+        ) -> None:
             for d in detections:
+                if inverse_matrix is not None:
+                    d = _restore_affine_bbox(d, inverse_matrix, gray.shape)
+                elif scale != 1.0:
+                    d = _restore_scaled_bbox(d, scale)
                 found.setdefault(d.value, d)
 
         # CLAHE contrast boost
@@ -156,13 +206,16 @@ class BarcodeModel:
         for angle in (-8, -5, -3, 3, 5, 8):
             M = cv2.getRotationMatrix2D(center, angle, 1.0)
             rotated = cv2.warpAffine(gray, M, (w, h), flags=cv2.INTER_CUBIC, borderValue=255)
-            add_all(self._decode(rotated))
+            add_all(
+                self._decode(rotated),
+                inverse_matrix=cv2.invertAffineTransform(M),
+            )
 
         # upscale — helps when a barcode occupies very few pixels (distant
         # or small labels); did NOT rescue a genuinely out-of-focus barcode
         # in testing, but costs little to try
         upscaled = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-        add_all(self._decode(upscaled))
+        add_all(self._decode(upscaled), scale=2.0)
 
         results = list(found.values())
         log.info("Fallback decoding found %d barcode(s): %s",
