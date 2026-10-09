@@ -372,7 +372,14 @@ python3 -m srcs.app.main
 
 ### Run the diagnostic pipeline test
 
-`tests/run_test.py` is a non-interactive one-shot runner. It uses the same segmentation, LCD, fusion, decision, and drawing stages but does not require the GUI state machine.
+`tests/run_test.py` is a non-interactive pipeline runner. It uses the same
+segmentation, LCD, fusion, decision, and drawing stages but does not require
+the GUI state machine. Activate the environment where the project dependencies
+are installed before running it:
+
+```bash
+source .venv/bin/activate
+```
 
 Mode `1` captures an image from the camera:
 
@@ -380,7 +387,8 @@ Mode `1` captures an image from the camera:
 python3 tests/run_test.py --mode 1
 ```
 
-Mode `0` uses the newest supported image found recursively under `data/captures`:
+Mode `0` processes every supported image found recursively under
+`data/captures`:
 
 ```bash
 python3 tests/run_test.py --mode 0
@@ -392,9 +400,10 @@ To run against the captures folder explicitly:
 python3 tests/run_test.py --mode 0 --image-dir data/captures
 ```
 
-Mode `0` with a specific image:
+To select a different folder, or one specific image:
 
 ```bash
+python3 tests/run_test.py --mode 0 --image-dir path/to/images
 python3 tests/run_test.py --mode 0 --image path/to/image.jpg
 ```
 
@@ -407,17 +416,31 @@ python3 tests/run_test.py --mode 0 --weights path/to/model.pt
 python3 tests/run_test.py --mode 0 --decision-strategy all
 ```
 
-Each run is stored under:
+Each run is stored under one run directory. Every input gets its own
+`images/<number>_<name>/` directory containing `input.jpg` and
+`annotated.jpg`; the parent directory contains the aggregate log and report:
 
 ```text
 data/logs/run_test/<run-id>/
-├── input.jpg
-├── annotated.jpg
+├── images/
+│   ├── 001_<image-name>/
+│   │   ├── input.jpg
+│   │   └── annotated.jpg
+│   └── ...
 ├── run_test.log
 └── report.json
 ```
 
-The report records configuration, data sources, image metadata, model loading, timings, detections, risk/barcode status, fusion matches, decisions, output paths, and full traceback information on failure.
+Models and LCD data are loaded once and reused across the images. The report
+contains per-image timings, detections, fusion matches, decisions and output
+paths, as well as aggregate totals. A failed image does not prevent later
+captures from being tested; the command exits nonzero and records each failure
+in the report. A run with no segmentation detections is reported as completed
+with a diagnostic warning, not as evidence that the model recognizes no
+objects: the bundled `yolo11n-seg.pt` is a generic smoke-test model, not a
+container-trained model. Barcode and risk defaults come from the runtime
+configuration; `--enable-barcode` / `--disable-barcode` and
+`--enable-risk` / `--disable-risk` override them for a diagnostic run.
 
 ## Runtime storage and logging
 
