@@ -26,7 +26,7 @@ What testing against the real photo confirmed
    layout entirely, as long as the identifier convention holds.
 
 4. "S<value>" is exactly the "ETQ Palette" field in the LCD JSON produced by
-   pipeline/lcd_formatter.py. This is the real fusion join key — read this
+   `srcs/utils/lcd_formatter.py`. This is the real fusion join key — read this
    barcode off a pallet in the photo, look up the same string in the LCD's
    `lines`, and you have your reference match. (The earlier design assumed
    a barcode would encode a container number directly — that assumption is
@@ -59,8 +59,8 @@ import numpy as np
 from pyzbar import pyzbar
 
 from config import settings
-from utils.geometry import BBox, BarcodeDetection
-from utils.logger import get_logger
+from srcs.utils.geometry import BBox, BarcodeDetection
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
 

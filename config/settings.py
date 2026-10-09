@@ -76,9 +76,15 @@ DISPLAY_FULLSCREEN = True
 # --------------------------------------------------------------------------
 DATA_DIR = PROJECT_ROOT / "data"
 CAPTURES_DIR = DATA_DIR / "captures"
-CONTAINERS_DB_PATH = DATA_DIR / "containers_db.json"
-CURRENT_LCD_JSON_PATH = DATA_DIR / "lcd" / "current_lcd.json"
-EXAMPLE_LCD_JSON_PATH = DATA_DIR / "lcd" / "example_lcd.json"
+CONTAINERS_DB_PATH = DATA_DIR / "Containers" / "containers_db.json"
+CURRENT_LCD_PDF_PATH = DATA_DIR / "lcd" / "LCD.pdf"
+EXAMPLE_LCD_JSON_PATH = DATA_DIR / "lcd" / "lcd_MP22738635.json"
+BARCODE_DATA_IDENTIFIERS = {
+    "P": "produit",
+    "S": "etq_palette",
+    "Q": "quantite",
+    "V": "vendeur",
+}
 LCD_OUTPUT_FIELDS = [
     "reference_number",
     "container_number",

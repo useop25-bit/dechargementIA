@@ -31,13 +31,12 @@ The current prototype is designed around a Raspberry Pi, camera, display, and tw
 - Ultralytics YOLO segmentation wrapper
 - optional risk/object-detection wrapper
 - optional barcode localization and decoding wrapper
-- LCD CSV-to-JSON conversion
+- LCD PDF-to-JSON conversion with completeness checks
 - container metadata loading
 - prototype fusion algorithm
 - prototype decision algorithm
 - annotated image rendering
 - detailed one-shot pipeline runner in `tests/run_test.py`
-- deterministic unit tests for geometry, LCD parsing, fusion, and decision behavior
 - application and session logs under `data/logs/`
 
 ### Not production-ready yet
@@ -58,12 +57,10 @@ A successful smoke test proves that the code path runs. It does not prove that t
 ```text
 .
 ├── README.md                    Project reference
-├── TODO                         Detailed remaining implementation work
 ├── .gitignore                   Local/runtime exclusions
 ├── config/
 │   ├── __init__.py
 │   ├── settings.py              Central runtime configuration
-│   ├── requirements.txt         Python dependencies
 │   ├── hardware/
 │   │   ├── buttons.py           GPIO and keyboard button controller
 │   │   ├── camera.py            OpenCV camera wrapper
@@ -81,26 +78,27 @@ A successful smoke test proves that the code path runs. It does not prove that t
 │   │   ├── risk_model.py
 │   │   └── barcode_model.py
 │   ├── pipeline/
-│   │   ├── lcd_formatter.py     CSV normalization and JSON loading
 │   │   ├── fusion.py             Detection-to-declaration matching
-│   │   ├── decision.py           Action/selection policy
-│   │   └── draw.py               Annotated image generation
+│   │   └── decision.py           Action/selection policy
 │   └── utils/
-│       ├── geometry.py            Shared dataclasses and bounding boxes
-│       └── logger.py              Console/file/session logging
+│       ├── lcd_formatter.py      LCD PDF parsing and JSON conversion
+│       ├── draw.py               Annotated image generation
+│       ├── geometry.py           Shared dataclasses and bounding boxes
+│       └── logger.py             Console/file/session logging
 ├── data/
-│   ├── containers_db.json         Example container metadata
+│   ├── Containers/
+│   │   └── containers_db.json    Container metadata
 │   ├── lcd/
-│   │   ├── example_lcd.csv       Example declaration input
-│   │   └── example_lcd.json      Example normalized declaration
+│   │   ├── LCD.pdf               Current LCD source
+│   │   └── lcd_MP22738635.json   Converted JSON example
 │   ├── captures/                  Runtime accepted/rejected sessions
 │   └── logs/                      Runtime application and test logs
 ├── tests/
-│   ├── test_lcd_formatter.py     LCD and basic decision tests
-│   ├── test_pipeline_logic.py    Geometry/fusion/decision tests
 │   └── run_test.py                Detailed camera/file pipeline diagnostic
 └── Collab/                       Training notebooks and research work
 ```
+
+Install Python dependencies from the repository-root `requirements.txt`.
 
 The local `setup.md` file is intentionally ignored by Git. It contains machine-specific installation notes and deployment values and should not be treated as portable project documentation.
 
@@ -252,31 +250,26 @@ The current barcode wrapper is not a substitute for that decision.
 
 ### LCD declaration data
 
-The LCD is the declared shipment list. The raw CSV is normalized by `srcs/pipeline/lcd_formatter.py` into records containing:
+The application and diagnostic runner parse `data/lcd/LCD.pdf` with
+`srcs/utils/lcd_formatter.py`, then write `data/lcd/lcd_<LCD number>.json`.
+The JSON contains the LCD header, delivery-note groups, and one `lines` entry
+per pallet label. Conversion fails rather than writing incomplete JSON if
+required header fields are missing or the parsed line count differs from
+`NBRE UM TOTAL`. If the PDF is absent, the application/test use
+`data/lcd/lcd_MP22738635.json`.
 
-```json
-{
-  "reference_number": "REF-00231",
-  "container_number": "MSCU1234567",
-  "description": "Example cargo",
-  "quantity": 12,
-  "weight_kg": 340.5
-}
+Convert the current PDF directly:
+
+```bash
+python3 -m srcs.utils.lcd_formatter data/lcd/LCD.pdf
 ```
 
-The formatter:
-
-- reads the CSV header using `csv.DictReader`
-- checks that the required columns exist
-- converts quantity and weight when possible
-- skips rows without a reference or container number
-- writes normalized JSON when requested
-
-The current declaration can be placed at `data/lcd/current_lcd.json`. If it is absent, the application uses `data/lcd/example_lcd.json`.
+The LCD's `ETQ Palette` value is the reference used to match a decoded `S`
+barcode. Its `Immatriculation` is the container number for the load.
 
 ### Container database
 
-`data/containers_db.json` maps a container number to physical metadata. Current example fields include:
+`data/Containers/containers_db.json` maps a container number to physical metadata. Current example fields include:
 
 - type
 - length in millimeters
@@ -310,11 +303,11 @@ The LCD formatter runs once per declaration input, not necessarily once per imag
 
 `srcs/pipeline/fusion.py` currently uses weighted evidence:
 
-1. barcode overlap and matching container number are the strongest signal
+1. barcode overlap and matching LCD pallet-label reference are the strongest signal
 2. apparent bounding-box ratio versus database dimensions is a weak signal
 3. detected count versus declared container count is a weak global signal
 
-The current behavior is deliberately conservative when no usable barcode matches an LCD container: the instance remains unresolved and receives no confident identity. This is an interim heuristic and is documented for replacement in [TODO](TODO).
+The current behavior is deliberately conservative when no usable barcode matches an LCD item: the instance remains unresolved and receives no confident identity. This is an interim heuristic that should be revisited with labeled real images.
 
 Important unresolved cases include duplicate container claims, conflicting barcode values, barcode values absent from the LCD, several references in one container, and no-barcode images.
 
@@ -331,7 +324,7 @@ This is not yet a final policy. In particular, the current leftmost strategy can
 
 ### Drawing
 
-`srcs/pipeline/draw.py` does not make decisions. It draws:
+`srcs/utils/draw.py` does not make decisions. It draws:
 
 - selection rectangles
 - matched container labels
@@ -346,22 +339,22 @@ All commands below are run from the repository root.
 
 ### Install dependencies
 
-The dependency list is in `config/requirements.txt`. Use a virtual environment. The complete Raspberry Pi procedure is in the ignored `setup.md`.
+The dependency list is in the repository-root `requirements.txt`. Use a virtual environment. The complete Raspberry Pi procedure is in the ignored `setup.md`.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r config/requirements.txt
+pip install -r requirements.txt
 ```
 
-### Run tests
+### Run the image-folder pipeline test
 
 ```bash
-python3 -m pytest -q
-python3 tests/test_pipeline_logic.py
+python3 tests/run_test.py --mode 0 --image-dir data/captures
 ```
 
-The tests are deterministic and do not require a camera, GPIO, or model weights.
+This test requires the configured Python dependencies and segmentation weights,
+but does not require a camera or GPIO.
 
 ### Run the interactive application
 
@@ -391,6 +384,12 @@ Mode `0` uses the newest supported image found recursively under `data/captures`
 
 ```bash
 python3 tests/run_test.py --mode 0
+```
+
+To run against the captures folder explicitly:
+
+```bash
+python3 tests/run_test.py --mode 0 --image-dir data/captures
 ```
 
 Mode `0` with a specific image:
@@ -482,7 +481,7 @@ Most switches can be overridden with environment variables. Model paths can be o
 - `DATA_DIR`
 - `CAPTURES_DIR`
 - `CONTAINERS_DB_PATH`
-- `CURRENT_LCD_JSON_PATH`
+- `CURRENT_LCD_PDF_PATH`
 - `EXAMPLE_LCD_JSON_PATH`
 - `LOG_DIR`
 - `RESULTS_LOG_PATH`
@@ -509,7 +508,6 @@ The generic model should never be used as evidence that the final model is accur
 ## Documentation map
 
 - [README.md](README.md): project architecture, behavior, data contracts, commands, and limitations
-- [TODO](TODO): detailed remaining implementation work and acceptance criteria
 - `setup.md`: local ignored machine-specific installation and Raspberry Pi deployment notes
 - `Collab/`: model-training notebooks and experiments
 

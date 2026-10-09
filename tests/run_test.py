@@ -203,35 +203,30 @@ def _load_input_image(args: argparse.Namespace, run_dir: Path, logger: logging.L
 
 def _load_data(logger: logging.Logger):
     from config import settings
-    from srcs.pipeline.lcd_formatter import format_lcd_csv, load_lcd_json
+    from srcs.utils.lcd_formatter import lcd_records_for_fusion, load_lcd_document
 
-    lcd_path = settings.CURRENT_LCD_JSON_PATH
-    if lcd_path.exists():
-        lcd_records = load_lcd_json(lcd_path)
-        lcd_source = lcd_path
-    elif settings.EXAMPLE_LCD_JSON_PATH.exists():
-        lcd_records = load_lcd_json(settings.EXAMPLE_LCD_JSON_PATH)
-        lcd_source = settings.EXAMPLE_LCD_JSON_PATH
-    else:
-        csv_path = settings.DATA_DIR / "lcd" / "example_lcd.csv"
-        lcd_records = format_lcd_csv(csv_path)
-        lcd_source = csv_path
-
+    lcd_document, lcd_source = load_lcd_document(
+        settings.CURRENT_LCD_PDF_PATH, settings.EXAMPLE_LCD_JSON_PATH
+    )
+    lcd_records = lcd_records_for_fusion(lcd_document)
     containers_db = json.loads(settings.CONTAINERS_DB_PATH.read_text(encoding="utf-8"))
     logger.info("LCD loaded from %s: %d records", lcd_source, len(lcd_records))
     logger.info("Container database loaded: %d entries", len(containers_db))
-    return lcd_records, containers_db, {"lcd_source": str(lcd_source), "lcd_records": len(lcd_records), "containers_db_records": len(containers_db)}
+    return lcd_records, containers_db, {
+        "lcd_source": str(lcd_source),
+        "lcd_records": len(lcd_records),
+        "containers_db_records": len(containers_db),
+    }
 
 
 def run(args: argparse.Namespace) -> int:
     configure_environment(args)
 
     from config import settings
-    from srcs.models.barcode_model import BarcodeModel
     from srcs.models.risk_model import RiskModel
     from srcs.models.segmentation_model import SegmentationModel
     from srcs.pipeline import decision as decision_pipeline
-    from srcs.pipeline import draw as draw_pipeline
+    from srcs.utils import draw as draw_pipeline
     from srcs.pipeline import fusion as fusion_pipeline
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")

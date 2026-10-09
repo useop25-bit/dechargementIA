@@ -15,7 +15,7 @@ from config.hardware.display import Display
 from srcs.models.barcode_model import BarcodeModel
 from srcs.models.risk_model import RiskModel
 from srcs.models.segmentation_model import SegmentationModel
-from srcs.pipeline.lcd_formatter import load_lcd_json
+from srcs.utils.lcd_formatter import lcd_records_for_fusion, load_lcd_document
 from srcs.app.state_machine import StateMachine
 from srcs.app.gui import App
 from srcs.utils.logger import get_logger
@@ -27,11 +27,12 @@ def _load_containers_db() -> dict:
         return json.load(f)
 
 def _load_lcd_records() -> list[dict]:
-    lcd_path = settings.CURRENT_LCD_JSON_PATH
-    if not lcd_path.exists():
-        lcd_path = settings.EXAMPLE_LCD_JSON_PATH
-        log.warning("No current LCD found; using example data at %s", lcd_path)
-    return load_lcd_json(lcd_path)
+    lcd_document, lcd_source = load_lcd_document(
+        settings.CURRENT_LCD_PDF_PATH, settings.EXAMPLE_LCD_JSON_PATH
+    )
+    if lcd_source == settings.EXAMPLE_LCD_JSON_PATH:
+        log.warning("No current LCD PDF found; using example data at %s", lcd_source)
+    return lcd_records_for_fusion(lcd_document)
 
 def main() -> None:
     if len(sys.argv) > 1:
