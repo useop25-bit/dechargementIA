@@ -83,6 +83,9 @@ class BarcodeDetection:
     symbology: str            # e.g. "CODE128", "QR", "EAN13", "OCR-ISO6346"
     confidence: float
     bbox: BBox
+    identifier: str | None = None
+    identifier_meaning: str | None = None
+    payload: str | None = None
 
 @dataclass
 class ContainerMatch:

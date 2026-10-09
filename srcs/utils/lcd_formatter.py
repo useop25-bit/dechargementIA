@@ -9,12 +9,12 @@ across 3 pages, totals cross-checked against the document's own
 "NBRE UM TOTAL" field).
 
 Usage:
-    python -m pipeline.lcd_formatter <input.pdf> <output.json>
+    python -m srcs.utils.lcd_formatter <input.pdf> [output.json]
 
 Or programmatically:
-    from pipeline.lcd_formatter import parse_lcd_pdf
-    lcd = parse_lcd_pdf("data/lcd/example_lcd.pdf")
-    lcd["lines"]  # flat list of {etq_palette, produit, designation, ...}
+    from srcs.utils.lcd_formatter import convert_lcd_pdf, parse_lcd_pdf
+    lcd = parse_lcd_pdf("data/lcd/LCD.pdf")
+    output = convert_lcd_pdf("data/lcd/LCD.pdf")
 
 --------------------------------------------------------------------------
 Real document structure (confirmed against an actual file)
@@ -63,7 +63,7 @@ from typing import Any
 
 import pdfplumber
 
-from utils.logger import get_logger
+from srcs.utils.logger import get_logger
 
 log = get_logger(__name__)
 
@@ -136,6 +136,8 @@ def parse_lcd_pdf(pdf_path: str | Path) -> dict[str, Any]:
     barcode on the physical tag — see models/barcode_model.py).
     """
     pdf_path = Path(pdf_path)
+    if not pdf_path.is_file():
+        raise FileNotFoundError(f"LCD PDF not found: {pdf_path}")
 
     header: dict[str, Any] = {}
     is_duplicata = False
@@ -223,17 +225,32 @@ def parse_lcd_pdf(pdf_path: str | Path) -> dict[str, Any]:
         "lines": flat_lines,
     }
 
-    expected_total = header.get("nbre_um_total")
-    if expected_total is not None and len(flat_lines) != expected_total:
-        log.warning(
-            "Parsed %d line(s) but LCD header declares NBRE UM TOTAL=%s — "
-            "mismatch may indicate a parsing gap (check 'unmatched' lines above) "
-            "or a genuinely incomplete scan (missing page).",
-            len(flat_lines), expected_total,
+    missing_header_fields = {
+        field
+        for field in ("lcd_number", "immatriculation", "date", "nbre_um_total")
+        if not header.get(field)
+    }
+    if missing_header_fields:
+        raise ValueError(
+            f"LCD PDF {pdf_path} is missing required header fields: "
+            f"{', '.join(sorted(missing_header_fields))}"
         )
-    else:
-        log.info("Parsed %d line(s) across %d delivery note(s) from %s (matches declared total)",
-                  len(flat_lines), len(bl_groups), pdf_path)
+    if not flat_lines:
+        raise ValueError(f"No pallet lines were parsed from LCD PDF: {pdf_path}")
+
+    expected_total = header["nbre_um_total"]
+    if len(flat_lines) != expected_total:
+        raise ValueError(
+            f"Parsed {len(flat_lines)} line(s) from {pdf_path}, but the LCD "
+            f"declares NBRE UM TOTAL={expected_total}; refusing to write incomplete JSON"
+        )
+
+    log.info(
+        "Parsed %d line(s) across %d delivery note(s) from %s",
+        len(flat_lines),
+        len(bl_groups),
+        pdf_path,
+    )
 
     return result
 
@@ -251,14 +268,74 @@ def load_lcd_json(json_path: str | Path) -> dict[str, Any]:
         return json.load(f)
 
 
+def convert_lcd_pdf(
+    pdf_path: str | Path, output_path: str | Path | None = None
+) -> Path:
+    """Convert an LCD PDF to JSON, defaulting to ``lcd_<LCD number>.json``."""
+    pdf_path = Path(pdf_path)
+    lcd = parse_lcd_pdf(pdf_path)
+    if output_path is None:
+        output_path = pdf_path.with_name(f"lcd_{lcd['lcd_number']}.json")
+    output_path = Path(output_path)
+    if output_path.resolve() == pdf_path.resolve():
+        raise ValueError("LCD JSON output path must not overwrite the source PDF")
+    write_lcd_json(lcd, output_path)
+    return output_path
+
+
+def load_lcd_document(
+    pdf_path: str | Path, json_path: str | Path
+) -> tuple[dict[str, Any], Path]:
+    """Prefer and convert the current PDF, falling back to the example JSON."""
+    pdf_path = Path(pdf_path)
+    json_path = Path(json_path)
+    if pdf_path.is_file():
+        output_path = convert_lcd_pdf(pdf_path)
+        return load_lcd_json(output_path), output_path
+    if json_path.is_file():
+        return load_lcd_json(json_path), json_path
+    raise FileNotFoundError(
+        f"Neither current LCD PDF nor fallback JSON exists: {pdf_path}, {json_path}"
+    )
+
+
+def lcd_records_for_fusion(lcd_document: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize parsed LCD pallet lines for the fusion pipeline."""
+    lines = lcd_document.get("lines")
+    if not isinstance(lines, list):
+        raise ValueError("LCD JSON must contain a 'lines' array")
+
+    container_number = lcd_document.get("immatriculation")
+    records: list[dict[str, Any]] = []
+    for line in lines:
+        if not isinstance(line, dict):
+            raise ValueError("LCD 'lines' entries must be JSON objects")
+        record = dict(line)
+        record.setdefault("container_number", container_number)
+        record.setdefault(
+            "reference_number", record.get("etq_palette") or record.get("no_bl")
+        )
+        if not record.get("container_number") or not record.get("reference_number"):
+            raise ValueError(
+                "LCD line is missing container_number/immatriculation or a "
+                "reference_number/etq_palette"
+            )
+        records.append(record)
+    return records
+
+
 def _main() -> None:
-    if len(sys.argv) != 3:
-        print("Usage: python -m pipeline.lcd_formatter <input.pdf> <output.json>")
+    if len(sys.argv) not in (2, 3):
+        print(
+            "Usage: python -m srcs.utils.lcd_formatter "
+            "<input.pdf> [output.json]"
+        )
         sys.exit(1)
 
-    input_pdf, output_json = sys.argv[1], sys.argv[2]
-    lcd = parse_lcd_pdf(input_pdf)
-    write_lcd_json(lcd, output_json)
+    input_pdf = sys.argv[1]
+    output_json = sys.argv[2] if len(sys.argv) == 3 else None
+    output_path = convert_lcd_pdf(input_pdf, output_json)
+    print(output_path)
 
 
 if __name__ == "__main__":

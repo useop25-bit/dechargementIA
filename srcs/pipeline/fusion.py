@@ -5,7 +5,7 @@ Goal: for every SegmentationInstance detected in the picture (a "blob" the
 segmentation model thinks is a container), figure out — with a confidence
 score — which declared LCD reference / container_number it actually is.
 
-# TODO(fusion-strategy): this is the most important open design point of the
+# Fusion-strategy: this is the most important open design point of the
 # whole project and the implementation below is a deliberately simple
 # starting point (weighted-evidence scoring), not a final answer. You said
 # you were considering something "very own coded, just with some logic" —
@@ -24,24 +24,18 @@ score — which declared LCD reference / container_number it actually is.
 
 Evidence signals implemented below:
   1. Barcode match (strongest): a decoded barcode whose bbox falls inside
-     (or heavily overlaps) a segmentation instance's bbox, and whose value
-     matches a known container_number in the LCD/containers_db.
+     a segmentation instance's bbox, and whose payload matches an LCD pallet
+     label or whose value matches a declared container number.
   2. Dimension match (weak, supporting signal): compare the apparent
      width/height ratio of the segmented instance's bbox against the real
-     container's length/width/height ratio from containers_db.json — a very
+     container's length/width/height ratio from
+     data/Containers/containers_db.json — a very
      rough sanity check, not a precise measurement (no camera calibration /
      distance estimation is implemented here).
   3. Count consistency (weak, global signal): if the number of segmented
      instances roughly matches the number of *distinct* container_numbers
      expected from the LCD, that's a small extra confidence boost for all
      matches (the scene "looks complete").
-
-# TODO(no-barcode-case): when no barcode overlaps a given instance at all,
-# this implementation currently returns confidence 0.0 / reference=None for
-# that instance ("needs manual review" territory — see decision.py). If you
-# want a smarter fallback (e.g. "assume left-to-right order matches LCD
-# order", or use relative size ranking against containers_db), that logic
-# belongs here — flagged for you to develop once you've seen real pictures.
 """
 
 from __future__ import annotations
@@ -84,11 +78,6 @@ def _dimension_match_score(
     Very rough plausibility check: does the aspect ratio (width/height) of
     the segmented bbox roughly match the real container's length/height
     ratio? Returns a score in [0, 1].
-
-    # TODO(calibration): without camera calibration / distance estimation
-    # this can only ever be a weak sanity signal, not a real measurement.
-    # If you add camera calibration later, this function is the place to
-    # plug in a proper size-consistency estimate.
     """
     dims = containers_db.get(container_number)
     if not dims:
@@ -116,8 +105,8 @@ def fuse(
     Args:
         instances: output of models.segmentation_model.SegmentationModel.predict
         barcodes: output of models.barcode_model.BarcodeModel.predict
-        lcd_records: output of pipeline.lcd_formatter.load_lcd_json
-        containers_db: parsed content of data/containers_db.json
+        lcd_records: normalized LCD lines with container and reference identifiers
+        containers_db: parsed content of data/Containers/containers_db.json
 
     Returns:
         One ContainerMatch per segmentation instance (best candidate found),
@@ -126,8 +115,14 @@ def fuse(
     # Precompute: container_number -> list of LCD records (a container can
     # hold several references).
     records_by_container: dict[str, list[dict]] = defaultdict(list)
+    records_by_reference: dict[str, dict] = {}
     for rec in lcd_records:
-        records_by_container[rec["container_number"]].append(rec)
+        container_number = rec.get("container_number")
+        if container_number:
+            records_by_container[container_number].append(rec)
+        reference_number = rec.get("reference_number") or rec.get("etq_palette")
+        if reference_number:
+            records_by_reference[str(reference_number)] = rec
 
     expected_container_count = len(records_by_container)
     detected_count = len(instances)
@@ -144,8 +139,31 @@ def fuse(
         reference_number: str | None = None
 
         barcode = _find_overlapping_barcode(instance, barcodes)
-        if barcode is not None and barcode.value in records_by_container:
+        barcode_payload = (
+            getattr(barcode, "payload", None) if barcode is not None else None
+        )
+        matched_record = (
+            records_by_reference.get(str(barcode_payload))
+            if barcode_payload
+            else None
+        )
+        if barcode is not None and matched_record is not None:
+            container_number = matched_record.get("container_number")
+            reference_number = (
+                matched_record.get("reference_number")
+                or matched_record.get("etq_palette")
+            )
+        elif barcode is not None and barcode.value in records_by_container:
             container_number = barcode.value
+            candidate_records = records_by_container[container_number]
+            reference_number = (
+                candidate_records[0].get("reference_number")
+                or candidate_records[0].get("etq_palette")
+            )
+        else:
+            candidate_records = []
+
+        if container_number is not None:
             evidence["barcode_match"] = settings.FUSION_BARCODE_MATCH_WEIGHT
             confidence += settings.FUSION_BARCODE_MATCH_WEIGHT
 
@@ -160,14 +178,15 @@ def fuse(
             )
             confidence += evidence["count_consistency"]
 
-            # A container can carry several references — without further
-            # disambiguation, pick the first declared one and surface the
-            # rest in evidence for pipeline/decision.py to mention if useful.
-            candidate_records = records_by_container[container_number]
-            reference_number = candidate_records[0]["reference_number"]
-            if len(candidate_records) > 1:
+            other_references = [
+                rec.get("reference_number") or rec.get("etq_palette")
+                for rec in records_by_container[container_number]
+                if (rec.get("reference_number") or rec.get("etq_palette"))
+                != reference_number
+            ]
+            if other_references:
                 evidence["other_references_in_container"] = [
-                    r["reference_number"] for r in candidate_records[1:]
+                    value for value in other_references if value is not None
                 ]
         else:
             log.info(

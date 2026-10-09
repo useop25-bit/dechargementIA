@@ -35,7 +35,7 @@ from srcs.models.barcode_model import BarcodeModel
 from srcs.models.risk_model import RiskModel
 from srcs.models.segmentation_model import SegmentationModel
 from srcs.pipeline import decision as decision_pipeline
-from srcs.pipeline import draw as draw_pipeline
+from srcs.utils import draw as draw_pipeline
 from srcs.pipeline import fusion as fusion_pipeline
 from srcs.utils.geometry import Decision
 from srcs.utils.logger import get_logger
